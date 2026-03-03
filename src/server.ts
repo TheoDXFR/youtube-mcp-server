@@ -258,8 +258,8 @@ export async function startMcpServer() {
     await server.connect(transport);
     
     // Log the server info
-    console.log(`YouTube MCP Server v1.0.0 started successfully`);
-    console.log(`Server will validate YouTube API key when tools are called`);
+    console.error(`YouTube MCP Server v1.0.0 started successfully`);
+    console.error(`Server will validate YouTube API key when tools are called`);
     
     return server;
 }
