@@ -1,9 +1,11 @@
-import { Server } from '@modelcontextprotocol/sdk/server';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
     CallToolRequestSchema,
     ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { VideoService } from './services/video.js';
 import { TranscriptService } from './services/transcript.js';
 import { PlaylistService } from './services/playlist.js';
@@ -18,7 +20,7 @@ import {
     PlaylistItemsParams,
 } from './types.js';
 
-export async function startMcpServer() {
+function createMcpServer(): Server {
     const server = new Server(
         {
             name: 'zubeid-youtube-mcp-server',
@@ -178,7 +180,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 case 'videos_searchVideos': {
                     const result = await videoService.searchVideos(args as unknown as SearchParams);
                     return {
@@ -188,7 +190,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 case 'transcripts_getTranscript': {
                     const result = await transcriptService.getTranscript(args as unknown as TranscriptParams);
                     return {
@@ -198,7 +200,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 case 'channels_getChannel': {
                     const result = await channelService.getChannel(args as unknown as ChannelParams);
                     return {
@@ -208,7 +210,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 case 'channels_listVideos': {
                     const result = await channelService.listVideos(args as unknown as ChannelVideosParams);
                     return {
@@ -218,7 +220,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 case 'playlists_getPlaylist': {
                     const result = await playlistService.getPlaylist(args as unknown as PlaylistParams);
                     return {
@@ -228,7 +230,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 case 'playlists_getPlaylistItems': {
                     const result = await playlistService.getPlaylistItems(args as unknown as PlaylistItemsParams);
                     return {
@@ -238,7 +240,7 @@ export async function startMcpServer() {
                         }]
                     };
                 }
-                
+
                 default:
                     throw new Error(`Unknown tool: ${name}`);
             }
@@ -253,13 +255,54 @@ export async function startMcpServer() {
         }
     });
 
-    // Create transport and connect
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    
-    // Log the server info
-    console.error(`YouTube MCP Server v1.0.0 started successfully`);
-    console.error(`Server will validate YouTube API key when tools are called`);
-    
     return server;
+}
+
+async function readBody(req: IncomingMessage): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+            try { resolve(body ? JSON.parse(body) : undefined); } catch { resolve(undefined); }
+        });
+        req.on('error', reject);
+    });
+}
+
+export async function startMcpServer() {
+    const port = process.env.PORT ? parseInt(process.env.PORT) : null;
+
+    if (port) {
+        // HTTP mode for Railway / remote deployments
+        const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+            if (req.url === '/mcp') {
+                try {
+                    const server = createMcpServer();
+                    const transport = new StreamableHTTPServerTransport({
+                        sessionIdGenerator: undefined, // stateless
+                    });
+                    await server.connect(transport);
+                    const body = req.method === 'POST' ? await readBody(req) : undefined;
+                    await transport.handleRequest(req, res, body);
+                } catch (error) {
+                    console.error('MCP request error:', error);
+                    if (!res.headersSent) {
+                        res.writeHead(500).end('Internal Server Error');
+                    }
+                }
+            } else {
+                res.writeHead(404).end('Not found');
+            }
+        });
+
+        httpServer.listen(port, () => {
+            console.error(`YouTube MCP Server listening on port ${port}`);
+        });
+    } else {
+        // stdio mode for local use
+        const server = createMcpServer();
+        const transport = new StdioServerTransport();
+        await server.connect(transport);
+        console.error('YouTube MCP Server started in stdio mode');
+    }
 }
